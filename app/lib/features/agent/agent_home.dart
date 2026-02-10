@@ -1,22 +1,37 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../auth/auth_service.dart';
 
 class AgentHome extends StatelessWidget {
   const AgentHome({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final auth = AuthService();
+    final user = Supabase.instance.client.auth.currentUser;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Agent Home')),
-      body: const Padding(
-        padding: EdgeInsets.all(16),
+      appBar: AppBar(
+        title: const Text('Agent Home'),
+        actions: [
+          IconButton(
+            onPressed: () async {
+              await auth.signOut();
+              if (context.mounted) context.go('/login');
+            },
+            icon: const Icon(Icons.logout),
+          )
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Today', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
-            SizedBox(height: 12),
-            Text('• Contacts (imported list)'),
-            Text('• Log a call'),
-            Text('• Follow-ups'),
+            Text('Signed in as: ${user?.email ?? "NOT SIGNED IN"}'),
+            const SizedBox(height: 12),
+            const Text('Next: Assignment queue → Call → OK/ISSUE → Save & Next'),
           ],
         ),
       ),

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'core/supabase/supabase_init.dart';
 import 'core/router/app_router.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initSupabase();
   runApp(const CallCenterApp());
 }
 
