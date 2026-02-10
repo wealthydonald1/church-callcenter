@@ -29,9 +29,13 @@ class AgentHome extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Signed in as: ${user?.email ?? "NOT SIGNED IN"}'),
-            const SizedBox(height: 12),
-            const Text('Next: Assignment queue → Call → OK/ISSUE → Save & Next'),
+            Text('Signed in as: ${user?.email ?? "-"}'),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () => context.go('/call'),
+              icon: const Icon(Icons.play_arrow),
+              label: const Text('Continue Calling'),
+            ),
           ],
         ),
       ),
