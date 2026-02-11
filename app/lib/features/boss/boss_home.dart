@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'issues_screen.dart';
 import 'import_batches_screen.dart';
 
@@ -12,6 +13,15 @@ class BossHome extends StatelessWidget {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Boss / Admin'),
+          actions: [
+            IconButton(
+              tooltip: 'Logout',
+              icon: const Icon(Icons.logout),
+              onPressed: () async {
+                await Supabase.instance.client.auth.signOut();
+              },
+            ),
+          ],
           bottom: const TabBar(
             tabs: [
               Tab(text: 'Open Issues'),
