@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../core/offline/role_cache.dart';
 import 'issues_screen.dart';
 import 'import_batches_screen.dart';
 
@@ -19,11 +21,8 @@ class BossHome extends StatelessWidget {
               icon: const Icon(Icons.logout),
               onPressed: () async {
                 await Supabase.instance.client.auth.signOut();
-                if (context.mounted) {
-                  Navigator.of(
-                    context,
-                  ).pushNamedAndRemoveUntil('/login', (route) => false);
-                }
+                await RoleCache.clear();
+                // No manual navigation: router redirect handles it (offline-safe).
               },
             ),
           ],
@@ -35,7 +34,10 @@ class BossHome extends StatelessWidget {
           ),
         ),
         body: const TabBarView(
-          children: [IssuesScreen(), ImportBatchesScreen()],
+          children: [
+            IssuesScreen(),
+            ImportBatchesScreen(),
+          ],
         ),
       ),
     );
