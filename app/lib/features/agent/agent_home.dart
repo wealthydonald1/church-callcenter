@@ -1,42 +1,61 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import '../auth/auth_service.dart';
 
-class AgentHome extends StatelessWidget {
+class AgentHome extends StatefulWidget {
   const AgentHome({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final auth = AuthService();
-    final user = Supabase.instance.client.auth.currentUser;
+  State<AgentHome> createState() => _AgentHomeState();
+}
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Agent Home'),
-        actions: [
-          IconButton(
-            onPressed: () async {
-              await auth.signOut();
-              if (context.mounted) context.go('/login');
-            },
-            icon: const Icon(Icons.logout),
-          )
-        ],
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Signed in as: ${user?.email ?? "-"}'),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: () => context.go('/call'),
-              icon: const Icon(Icons.play_arrow),
-              label: const Text('Continue Calling'),
-            ),
-          ],
+class _AgentHomeState extends State<AgentHome> {
+  DateTime? _lastBackPressed;
+
+  bool _shouldExitOrPop() {
+    final router = GoRouter.of(context);
+
+    if (router.canPop()) {
+      router.pop();
+      return false;
+    }
+
+    final now = DateTime.now();
+    if (_lastBackPressed == null ||
+        now.difference(_lastBackPressed!) > const Duration(seconds: 2)) {
+      _lastBackPressed = now;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Press back again to exit'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return false;
+    }
+
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope<void>(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        final shouldExit = _shouldExitOrPop();
+        if (shouldExit) {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Agent'),
+        ),
+        body: Center(
+          child: ElevatedButton(
+            onPressed: () => context.go('/call'),
+            child: const Text('Open Call Queue'),
+          ),
         ),
       ),
     );

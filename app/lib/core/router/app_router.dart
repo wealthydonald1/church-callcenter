@@ -9,12 +9,14 @@ import '../../features/auth/login_screen.dart';
 import '../../features/agent/agent_home.dart';
 import '../../features/agent/call_queue_screen.dart';
 import '../../features/boss/boss_home.dart';
+import '../../features/admin/admin_home.dart';
 import '../../features/common/splash_screen.dart';
 
 class GoRouterRefreshStream extends ChangeNotifier {
   GoRouterRefreshStream(Stream<dynamic> stream) {
     _sub = stream.asBroadcastStream().listen((_) => notifyListeners());
   }
+
   late final StreamSubscription<dynamic> _sub;
 
   @override
@@ -32,14 +34,21 @@ Future<String?> _getRoleCachedFirst() async {
   if (user == null) return null;
 
   try {
-    final row = await sb.from('profiles').select('role').eq('id', user.id).maybeSingle();
+    final row = await sb
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .maybeSingle();
+
     final role = row == null ? null : row['role'] as String?;
+
     if (role != null && role.isNotEmpty) {
       await RoleCache.setRole(role);
     }
+
     return role;
   } catch (_) {
-    // offline/network/RLS failure: use cached role
+    // Offline / network failure → use cached role
     return await RoleCache.getRole();
   }
 }
@@ -47,14 +56,20 @@ Future<String?> _getRoleCachedFirst() async {
 final appRouter = GoRouter(
   initialLocation: '/splash',
   refreshListenable: GoRouterRefreshStream(
-    Supabase.instance.client.auth.onAuthStateChange.map((event) => event.session),
+    Supabase.instance.client.auth.onAuthStateChange.map(
+      (event) => event.session,
+    ),
   ),
   routes: [
     GoRoute(path: '/splash', builder: (context, state) => const SplashScreen()),
     GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
     GoRoute(path: '/agent', builder: (context, state) => const AgentHome()),
     GoRoute(path: '/boss', builder: (context, state) => const BossHome()),
-    GoRoute(path: '/call', builder: (context, state) => const CallQueueScreen()),
+    GoRoute(path: '/admin', builder: (context, state) => const AdminHome()),
+    GoRoute(
+      path: '/call',
+      builder: (context, state) => const CallQueueScreen(),
+    ),
   ],
   redirect: (context, state) async {
     try {
@@ -65,30 +80,34 @@ final appRouter = GoRouter(
       final goingToSplash = loc == '/splash';
       final goingToLogin = loc == '/login';
 
-      // Not signed in → only allow login/splash
+      // 🔒 Not signed in
       if (user == null) {
         return (goingToLogin || goingToSplash) ? null : '/login';
       }
 
-      // Signed in → don’t stay on login
+      // 🚫 Signed in but on login → redirect by role
       if (goingToLogin) {
         final role = await _getRoleCachedFirst();
+
         if (role == 'boss') return '/boss';
-        if (role == 'admin') return '/boss'; // TEMP until /admin exists
+        if (role == 'admin') return '/admin';
+
         return '/agent';
       }
 
-      // Signed in and on splash → route based on role (cached if offline)
+      // 🚀 Signed in and on splash → route by role
       if (goingToSplash) {
         final role = await _getRoleCachedFirst();
+
         if (role == 'boss') return '/boss';
-        if (role == 'admin') return '/boss';
+        if (role == 'admin') return '/admin';
+
         return '/agent';
       }
 
       return null;
     } catch (_) {
-      // Never blank-screen because of redirect exceptions
+      // Prevent blank screen from redirect errors
       return null;
     }
   },

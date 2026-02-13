@@ -1,10 +1,12 @@
-import 'package:drift/drift.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:drift/drift.dart' hide Column;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/offline/local_db.dart';
+import '../../core/offline/offline_status.dart';
 import '../../core/offline/sync_service.dart';
 
 class CallQueueScreen extends StatefulWidget {
@@ -19,6 +21,7 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
 
   late final LocalDb _db;
   late final SyncService _sync;
+  late final OfflineStatus _status;
 
   Map<String, dynamic>? _item;
   bool _loading = true;
@@ -28,12 +31,34 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
   String _tag = 'OK';
   bool _saving = false;
 
+  bool _offline = false;
+  int _pending = 0;
+  bool _syncing = false;
+
   @override
   void dispose() {
     _notes.dispose();
     _sync.dispose();
     _db.close();
     super.dispose();
+  }
+
+  Future<void> _refreshStatus() async {
+    try {
+      final offline = await _status.isOffline();
+      final pending = await _status.pendingCount();
+      if (!mounted) return;
+      setState(() {
+        _offline = offline;
+        _pending = pending;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _offline = false;
+        _pending = 0;
+      });
+    }
   }
 
   Map<String, dynamic> _mapCacheRowToItem(CachedQueueItem row) {
@@ -88,9 +113,7 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
 
     final rows = await sb
         .from('assignment_items')
-        .select(
-          'id, assignment_id, contact_id, order_index, status, contacts(name, phone, pcf)',
-        )
+        .select('id, assignment_id, contact_id, order_index, status, contacts(name, phone, pcf)')
         .eq('assigned_to', uid)
         .eq('status', 'pending')
         .order('order_index', ascending: true)
@@ -115,6 +138,7 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
     }
 
     final next = await _loadNextFromCache();
+    await _refreshStatus();
 
     if (!mounted) return;
     setState(() {
@@ -136,6 +160,26 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
     }
   }
 
+  Future<void> _syncNow() async {
+    setState(() => _syncing = true);
+    try {
+      await _sync.trySync();
+      await _refreshStatus();
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_pending == 0 ? 'All synced ✅' : 'Sync attempted ($_pending pending)')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sync failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+  }
+
   Future<void> _saveAndNext() async {
     if (_item == null) return;
 
@@ -151,41 +195,54 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
       final pcf = (contact['pcf'] as String?) ?? '';
 
       // 1) Outbox first (offline safe)
-      await _db
-          .into(_db.outboxCallLogs)
-          .insert(
-            OutboxCallLogsCompanion.insert(
-              assignmentItemId: itemId,
-              assignmentId: assignmentId,
-              contactId: contactId,
-              contactName: name,
-              phone: phone,
-              pcf: Value(pcf),
-              outcome: _outcome,
-              tag: _tag,
-              notes: Value(_tag == 'ISSUE' ? _notes.text.trim() : null),
-              createdAt: DateTime.now(),
-            ),
-          );
+      await _db.into(_db.outboxCallLogs).insert(
+        OutboxCallLogsCompanion.insert(
+          assignmentItemId: itemId,
+          assignmentId: assignmentId,
+          contactId: contactId,
+          contactName: name,
+          phone: phone,
+          pcf: Value(pcf),
+          outcome: _outcome,
+          tag: _tag,
+          notes: Value(_tag == 'ISSUE' ? _notes.text.trim() : null),
+          createdAt: DateTime.now(),
+        ),
+      );
 
       // 2) Mark cached as done
-      await (_db.update(_db.cachedQueueItems)
-            ..where((t) => t.assignmentItemId.equals(itemId)))
+      await (_db.update(_db.cachedQueueItems)..where((t) => t.assignmentItemId.equals(itemId)))
           .write(const CachedQueueItemsCompanion(done: Value(true)));
 
       // 3) Best-effort sync
       await _sync.trySync();
+      await _refreshStatus();
 
       // 4) Next item
       await _loadNext();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Save failed: $e')),
+      );
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Widget _statusChip() {
+    final label = _offline
+        ? (_pending > 0 ? 'Offline • $_pending pending' : 'Offline • saving locally')
+        : (_pending > 0 ? 'Online • $_pending pending' : 'Online');
+
+    final icon = _offline
+        ? Icons.cloud_off
+        : (_pending > 0 ? Icons.sync : Icons.cloud_done);
+
+    return Chip(
+      avatar: Icon(icon, size: 18),
+      label: Text(label),
+    );
   }
 
   @override
@@ -193,6 +250,11 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
     super.initState();
     _db = LocalDb();
     _sync = SyncService(db: _db, sb: sb)..start();
+    _status = OfflineStatus(_db);
+
+    // quick live updates (optional but nice)
+    Connectivity().onConnectivityChanged.listen((_) => _refreshStatus());
+
     _loadNext();
   }
 
@@ -204,11 +266,29 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
 
     if (_item == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Call Queue')),
-        body: const Center(
+        appBar: AppBar(
+          title: const Text('Call Queue'),
+          actions: [
+            IconButton(
+              tooltip: 'Sync now',
+              onPressed: _syncing ? null : _syncNow,
+              icon: _syncing
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.sync),
+            ),
+          ],
+        ),
+        body: Center(
           child: Padding(
-            padding: EdgeInsets.all(16),
-            child: Text('No pending calls assigned to you.'),
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _statusChip(),
+                const SizedBox(height: 12),
+                const Text('No pending calls assigned to you.'),
+              ],
+            ),
           ),
         ),
       );
@@ -224,6 +304,14 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
         title: const Text('Call Queue'),
         actions: [
           IconButton(
+            tooltip: 'Sync now',
+            onPressed: (_saving || _syncing) ? null : _syncNow,
+            icon: _syncing
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.sync),
+          ),
+          IconButton(
+            tooltip: 'Refresh',
             onPressed: _saving ? null : _loadNext,
             icon: const Icon(Icons.refresh),
           ),
@@ -233,13 +321,14 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
         padding: const EdgeInsets.all(16),
         child: ListView(
           children: [
-            Text(
-              name,
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-            ),
+            _statusChip(),
+            const SizedBox(height: 10),
+
+            Text(name, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
             const SizedBox(height: 6),
             Text('PCF: ${pcf.isEmpty ? "-" : pcf}'),
             const SizedBox(height: 6),
+
             Row(
               children: [
                 Expanded(child: Text(phone.isEmpty ? '-' : phone)),
@@ -251,6 +340,7 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
                 ),
               ],
             ),
+
             const SizedBox(height: 20),
             const Text('Outcome'),
             DropdownButton<String>(
@@ -260,19 +350,12 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
                 DropdownMenuItem(value: 'reached', child: Text('Reached')),
                 DropdownMenuItem(value: 'no_answer', child: Text('No answer')),
                 DropdownMenuItem(value: 'busy', child: Text('Busy')),
-                DropdownMenuItem(
-                  value: 'switched_off',
-                  child: Text('Switched off'),
-                ),
-                DropdownMenuItem(
-                  value: 'wrong_number',
-                  child: Text('Wrong number'),
-                ),
+                DropdownMenuItem(value: 'switched_off', child: Text('Switched off')),
+                DropdownMenuItem(value: 'wrong_number', child: Text('Wrong number')),
               ],
-              onChanged: _saving
-                  ? null
-                  : (v) => setState(() => _outcome = v ?? 'reached'),
+              onChanged: _saving ? null : (v) => setState(() => _outcome = v ?? 'reached'),
             ),
+
             const SizedBox(height: 12),
             const Text('Tag'),
             SegmentedButton<String>(
@@ -281,10 +364,9 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
                 ButtonSegment(value: 'ISSUE', label: Text('ISSUE')),
               ],
               selected: {_tag},
-              onSelectionChanged: _saving
-                  ? null
-                  : (s) => setState(() => _tag = s.first),
+              onSelectionChanged: _saving ? null : (s) => setState(() => _tag = s.first),
             ),
+
             const SizedBox(height: 12),
             if (_tag == 'ISSUE') ...[
               const Text('Issue description'),
@@ -299,6 +381,7 @@ class _CallQueueScreenState extends State<CallQueueScreen> {
               ),
               const SizedBox(height: 12),
             ],
+
             FilledButton(
               onPressed: _saving ? null : _saveAndNext,
               child: Text(_saving ? 'Saving...' : 'Save & Next'),
